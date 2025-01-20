@@ -1,0 +1,41 @@
+/* src/assets/styles.css */
+
+/* Tailwind's base styles */
+@tailwind base;
+/* Tailwind's component styles */
+@tailwind components;
+/* Tailwind's utility classes */
+@tailwind utilities;
+body{
+  background-color:rgb(12, 12, 12);
+}
+*{
+  color:white;
+}
+.header{
+  justify-content:space-evenly;
+  padding-top:10px;
+  padding-bottom:10px;
+}
+.header-list > li{
+  display:inline;
+  list-style:none;
+  margin-left:15px;
+  
+}
+input{
+background:none;
+}
+.launch-video-player{
+  justify-content:center;
+  align-items:center;
+  flex-direction:column;
+  margin-top:150px;
+}
+.launch-btn{
+  border-radius:10px;
+  padding:10px 10px;
+}
+.video-container{
+  max-width:100%;
+}
