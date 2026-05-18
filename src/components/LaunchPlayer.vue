@@ -33,10 +33,11 @@ const launchFile = () => {
 <template>
   <div v-if="videoFile === null" class="video-selector block">
     <div class="flex launch-video-player">
-      <h4 class="font-bold m-4">Upload a Video File to Start</h4>
-      <span @click="launchFile" class="text-5xl cursor-pointer"
-        ><i class="fa-light fa-cloud-arrow-up"></i
-      ></span>
+      <h4 @click="launchFile" class="font-bold text-center cursor-pointer m-4">Upload a Video File to Start
+          <span style="color:white; font-weight:bold;"  class="text-5xl text-white font-bold cursor-pointer"
+        ><i class="fa fa-youtube-play"></i
+      ></span></h4>
+    
       <form @submit="uploadVideo">
         <input
           @change="setVideo"

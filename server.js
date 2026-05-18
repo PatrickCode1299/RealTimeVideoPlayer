@@ -1,6 +1,8 @@
 import { WebSocketServer } from 'ws'; // Use WebSocketServer for ES module imports
 
-const wss = new WebSocketServer({ port: 8080 }); // Create WebSocket server
+const wss = new WebSocketServer({
+  host:"0.0.0.0",
+   port: 8080 }); // Create WebSocket server
 
 let clients = [];
 

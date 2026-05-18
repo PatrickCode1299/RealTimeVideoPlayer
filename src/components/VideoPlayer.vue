@@ -1,284 +1,386 @@
 <script setup>
 import { ref, onMounted } from "vue";
 
-// Props to accept the video file
+// Props
 const videoPlayer = defineProps(["videoUrl"]);
 
-// Refs for dynamic values
-const isMuted = ref(false);
+// Reactive state
+const isMuted = ref(true);
 const currentTime = ref("");
-const isPlaying = ref(true);
+const isPlaying = ref(false);
 const progress = ref(0);
 
-// WebRTC setup
-let localStream;
-let peerConnection;
-const signalingServer = new WebSocket("ws://localhost:8080");
+// WebRTC variables
+let localStream = null;
+let peerConnection = null;
+let signalingServer = null;
 
-// Set up WebRTC and handle controls
-const setupWebRTC = () => {
-  const video = document.getElementById("video");
+const host = window.location.hostname;
 
-  // Ensure the video element is ready
-  video.addEventListener("canplay", () => {
-  console.log(`Video readyState: ${video.readyState}`);
-  if (video.readyState >= 2) { // 2 === HAVE_CURRENT_DATA
-    localStream = video.captureStream();
-    console.log("Local stream captured", localStream);
-    initializeWebRTC(localStream);
-  } else {
-    console.error("Video not ready to capture stream");
-  }
-});
+// -----------------------------
+// WEBRTC SETUP
+// -----------------------------
+const initializeWebRTC = async (stream) => {
+  if (peerConnection) return;
 
+  peerConnection = new RTCPeerConnection({
+    iceServers: [
+      {
+        urls: "stun:stun.l.google.com:19302",
+      },
+    ],
+  });
 
-  // Handle incoming WebSocket messages
-  // Handle incoming WebSocket messages
-signalingServer.onmessage = (message) => {
-  const data = message.data;
+  console.log("Initializing WebRTC...");
 
-  if (data instanceof Blob) {
-    // If the data is a Blob, read its content
-    const reader = new FileReader();
-    reader.onload = (event) => {
-      try {
-        const parsedData = JSON.parse(event.target.result);
-        handleMessage(parsedData);
-      } catch (error) {
-        console.error('Failed to parse Blob content as JSON:', error);
-      }
-    };
-    reader.readAsText(data);
-  } else if (typeof data === "string") {
-    // If the data is a string, parse it as JSON directly
-    try {
-      const parsedData = JSON.parse(data);
-      handleMessage(parsedData);
-    } catch (error) {
-      console.error("Failed to parse WebSocket message as JSON:", error);
+  // Add tracks
+  stream.getTracks().forEach((track) => {
+    peerConnection.addTrack(track, stream);
+  });
+
+  // ICE candidates
+  peerConnection.onicecandidate = (event) => {
+    if (event.candidate) {
+      signalingServer.send(
+        JSON.stringify({
+          type: "candidate",
+          candidate: event.candidate,
+        })
+      );
     }
-  } else {
-    console.error("Received an unknown message format:", data);
+  };
+
+  // Connection state debugging
+  peerConnection.onconnectionstatechange = () => {
+    console.log(
+      "Connection state:",
+      peerConnection.connectionState
+    );
+  };
+
+  // Receive remote stream
+  peerConnection.ontrack = (event) => {
+    console.log("Remote track received");
+
+    const remoteVideo =
+      document.getElementById("remoteVideo");
+
+    if (remoteVideo) {
+      remoteVideo.srcObject = event.streams[0];
+
+      remoteVideo
+        .play()
+        .catch((err) =>
+          console.error("Remote video play failed:", err)
+        );
+    }
+  };
+
+  // Create offer
+  try {
+    const offer = await peerConnection.createOffer();
+
+    await peerConnection.setLocalDescription(offer);
+
+    signalingServer.send(
+      JSON.stringify({
+        type: "offer",
+        offer: peerConnection.localDescription,
+      })
+    );
+
+    console.log("Offer sent");
+  } catch (err) {
+    console.error("Offer creation failed:", err);
   }
 };
 
-// Handle parsed JSON data
+// -----------------------------
+// HANDLE SIGNALING
+// -----------------------------
 const handleMessage = async (data) => {
-  if (!peerConnection) {
-    console.error("peerConnection is not initialized.");
+  if (!peerConnection && data.type !== "offer") {
+    console.error("PeerConnection not initialized");
     return;
   }
 
-  switch (data.type) {
-    case 'offer':
-      if (!data.offer || !data.offer.sdp) {
-        console.error("Offer missing SDP");
-        return;
-      }
+  try {
+    switch (data.type) {
+      case "offer": {
+        console.log("Received offer");
 
-      const offerDesc = new RTCSessionDescription(data.offer);
-      try {
-        await peerConnection.setRemoteDescription(offerDesc);
-        const answer = await peerConnection.createAnswer();
-        await peerConnection.setLocalDescription(answer);
-        signalingServer.send(JSON.stringify({ type: 'answer', answer }));
-      } catch (error) {
-        console.error('Error during offer handling: ', error);
-      }
-      break;
+        if (!peerConnection) {
+          peerConnection = new RTCPeerConnection({
+            iceServers: [
+              {
+                urls: "stun:stun.l.google.com:19302",
+              },
+            ],
+          });
 
-    case 'answer':
-      if (!data.answer || !data.answer.sdp) {
-        console.error("Answer missing SDP");
-        return;
-      }
-      const answerDesc = new RTCSessionDescription(data.answer);
-      try {
-        await peerConnection.setRemoteDescription(answerDesc);
-      } catch (error) {
-        console.error('Error during answer handling: ', error);
-      }
-      break;
+          peerConnection.onicecandidate = (event) => {
+            if (event.candidate) {
+              signalingServer.send(
+                JSON.stringify({
+                  type: "candidate",
+                  candidate: event.candidate,
+                })
+              );
+            }
+          };
 
-    case 'candidate':
-      if (data.candidate) {
-        try {
-          await peerConnection.addIceCandidate(new RTCIceCandidate(data.candidate));
-        } catch (error) {
-          console.error('Error adding ICE candidate: ', error);
+          peerConnection.ontrack = (event) => {
+            const remoteVideo =
+              document.getElementById("remoteVideo");
+
+            remoteVideo.srcObject = event.streams[0];
+
+            remoteVideo.play();
+          };
         }
-      }
-      break;
 
-    default:
-      console.log("Unknown message type: ", data.type);
+        await peerConnection.setRemoteDescription(
+          new RTCSessionDescription(data.offer)
+        );
+
+        const answer =
+          await peerConnection.createAnswer();
+
+        await peerConnection.setLocalDescription(answer);
+
+        signalingServer.send(
+          JSON.stringify({
+            type: "answer",
+            answer,
+          })
+        );
+
+        console.log("Answer sent");
+
+        break;
+      }
+
+      case "answer": {
+        console.log("Received answer");
+
+        await peerConnection.setRemoteDescription(
+          new RTCSessionDescription(data.answer)
+        );
+
+        break;
+      }
+
+      case "candidate": {
+        console.log("Received ICE candidate");
+
+        if (data.candidate) {
+          await peerConnection.addIceCandidate(
+            new RTCIceCandidate(data.candidate)
+          );
+        }
+
+        break;
+      }
+
+      default:
+        console.log("Unknown message:", data.type);
+    }
+  } catch (err) {
+    console.error("Signaling error:", err);
   }
 };
 
-}
-// Initialize WebRTC PeerConnection
-const initializeWebRTC = (localStream) => {
-  if (!peerConnection) {
-    peerConnection = new RTCPeerConnection({
-      iceServers: [
-        { urls: 'stun:stun.l.google.com:19302' }
-      ]
-    });
-
-    // Add local video tracks to the peer connection
-    localStream.getTracks().forEach(track => peerConnection.addTrack(track, localStream));
-
-    peerConnection.onicecandidate = (event) => {
-      if (event.candidate) {
-        signalingServer.send(JSON.stringify({
-          type: 'candidate',
-          candidate: event.candidate
-        }));
-      }
-    };
-
-    peerConnection.ontrack = (event) => {
-      const remoteStream = event.streams[0];
-      const remoteVideo = document.getElementById("remoteVideo");
-      if (remoteVideo) {
-        remoteVideo.srcObject = remoteStream;
-      }
-    };
-
-    // Create offer and send to signaling server
-    peerConnection.createOffer()
-      .then(offer => {
-        return peerConnection.setLocalDescription(offer);
-      })
-      .then(() => {
-        signalingServer.send(JSON.stringify({
-          type: 'offer',
-          offer: peerConnection.localDescription
-        }));
-      })
-      .catch(error => console.error('Error creating offer: ', error));
-  }
-};
-
-// Utility function for formatting time
-const formatTime = (seconds) => {
-  const mins = Math.floor(seconds / 60).toString().padStart(2, "0");
-  const secs = Math.floor(seconds % 60).toString().padStart(2, "0");
-  return `${mins}:${secs}`;
-};
-
-onMounted(() => {
+// -----------------------------
+// COMPONENT MOUNT
+// -----------------------------
+onMounted(async () => {
   const video = document.getElementById("video");
-  isPlaying.value = true;
 
-  setupWebRTC();
+  // WebSocket
+  signalingServer = new WebSocket(
+    `ws://${host}:8080`
+  );
+
+  signalingServer.onopen = () => {
+    console.log("Connected to signaling server");
+  };
+
+  signalingServer.onmessage = async (message) => {
+    try {
+      const data =
+        typeof message.data === "string"
+          ? JSON.parse(message.data)
+          : JSON.parse(await message.data.text());
+
+      handleMessage(data);
+    } catch (err) {
+      console.error("Message parse error:", err);
+    }
+  };
+
+  // Wait until video is ACTUALLY playing
+  video.addEventListener(
+    "playing",
+    async () => {
+      console.log("Video is playing");
+
+      try {
+        localStream = video.captureStream();
+
+        console.log(
+          "Captured stream:",
+          localStream
+        );
+
+        console.log(
+          "Tracks:",
+          localStream.getTracks()
+        );
+
+        await initializeWebRTC(localStream);
+      } catch (err) {
+        console.error(
+          "captureStream failed:",
+          err
+        );
+      }
+    },
+    { once: true }
+  );
+
+  // Force playback
+  try {
+    await video.play();
+
+    isPlaying.value = true;
+  } catch (err) {
+    console.error("Autoplay failed:", err);
+  }
 });
 
-// Video control functions
-const playVideo = () => {
+// -----------------------------
+// CONTROLS
+// -----------------------------
+const playVideo = async () => {
   const video = document.getElementById("video");
+
+  await video.play();
+
   isPlaying.value = true;
-  video.play();
-  document.getElementById("play").style.display = "none";
-  document.getElementById("pause").style.display = "block";
 };
 
 const pauseVideo = () => {
   const video = document.getElementById("video");
-  isPlaying.value = false;
+
   video.pause();
-  document.getElementById("play").style.display = "block";
-  document.getElementById("pause").style.display = "none";
+
+  isPlaying.value = false;
 };
 
 const toggleMute = () => {
   const video = document.getElementById("video");
+
   video.muted = !video.muted;
+
   isMuted.value = video.muted;
 };
 
 const seekVideo = (event) => {
   const video = document.getElementById("video");
-  if (!video.duration || isNaN(video.duration)) {
-    console.error("Video duration is not available yet!");
-    return;
-  }
 
-  const boundingBox = event.target.getBoundingClientRect();
-  const offsetX = event.clientX - boundingBox.left;
-  const progressBarWidth = boundingBox.width;
-  const seekToTime = (offsetX / progressBarWidth) * video.duration;
+  if (!video.duration) return;
 
-  if (isFinite(seekToTime)) {
-    video.currentTime = seekToTime;
-    progress.value = (seekToTime / video.duration) * 100;
-  } else {
-    console.error("Invalid seekToTime calculation:", seekToTime);
-  }
+  const rect =
+    event.target.getBoundingClientRect();
+
+  const offsetX = event.clientX - rect.left;
+
+  const seekTime =
+    (offsetX / rect.width) * video.duration;
+
+  video.currentTime = seekTime;
+
+  progress.value =
+    (seekTime / video.duration) * 100;
 };
 </script>
 
 <template>
-  <div class="block video-player-div relative p-4 border rounded">
-    <!-- Video Element -->
+  <div
+    class="block video-player-div relative p-4 border rounded"
+  >
+    <!-- LOCAL VIDEO -->
     <video
       id="video"
-      style="width: 100%; height: auto"
-      autoplay
       :src="videoPlayer.videoUrl"
+      autoplay
+      muted
+      playsinline
+      controls
+      style="width: 100%; height: auto"
     />
 
-    <!-- Remote Video Stream -->
-    <video id="remoteVideo" style="display:none; width: 100%; height: auto;"></video>
+    <!-- REMOTE VIDEO -->
+    <video
+      id="remoteVideo"
+      autoplay
+      playsinline
+      controls
+      style="width: 100%; height: auto"
+    />
 
-    <!-- Video Controls -->
-    <div class="controls flex items-center justify-between mt-2">
-      <!-- Play and Pause Buttons -->
+    <!-- CONTROLS -->
+    <div
+      class="controls flex items-center justify-between mt-2"
+    >
       <div>
-        <button id="play" @click="playVideo" class="video-btn bg-green-400 text-2xl mx-2">
-          <i class="fa-light fa-play"></i>
+        <button
+          @click="playVideo"
+          class="video-btn bg-green-400 text-2xl mx-2"
+        >
+          ▶
         </button>
-        <button id="pause" @click="pauseVideo" class="video-btn bg-green-400 text-2xl mx-2">
-          <i class="fa-light fa-pause"></i>
+
+        <button
+          @click="pauseVideo"
+          class="video-btn bg-green-400 text-2xl mx-2"
+        >
+          ⏸
         </button>
       </div>
 
-      <!-- Mute Button -->
-      <button @click="toggleMute" class="video-btn text-2xl mx-2">
-        <i class="fa-light" :class="isMuted ? 'fa-volume-xmark' : 'fa-volume-high'"></i>
+      <button
+        @click="toggleMute"
+        class="video-btn text-2xl mx-2"
+      >
+        {{ isMuted ? "🔇" : "🔊" }}
       </button>
 
-      <!-- Current Time Display -->
-      <span class="current-time text-lg mx-2">{{ currentTime }}</span>
+      <span>{{ currentTime }}</span>
     </div>
 
-    <!-- Progress Bar -->
-    <div class="progress-bar relative h-3 bg-gray-300 rounded-full mt-2 cursor-pointer" @click="seekVideo">
-      <div class="progress h-full bg-green-500 rounded-full" :style="{ width: `${progress}%` }"></div>
+    <!-- PROGRESS -->
+    <div
+      class="progress-bar relative h-3 bg-gray-300 rounded-full mt-2 cursor-pointer"
+      @click="seekVideo"
+    >
+      <div
+        class="progress h-full bg-green-500 rounded-full"
+        :style="{ width: `${progress}%` }"
+      />
     </div>
   </div>
 </template>
 
 <style scoped>
 .video-player-div {
-  max-width:800px;
-  object-fit: cover;
+  max-width: 800px;
   margin: auto;
   background-color: #171717;
 }
+
 .video-btn {
-  color: #333;
-  transition: color 0.2s ease;
-  border-radius:50px;
-  padding:5px 5px;
-}
-.video-btn:hover {
-  color: #007bff;
-}
-.progress-bar {
-  position: relative;
-}
-.progress {
-  transition: width 0.2s ease;
+  border-radius: 50px;
+  padding: 5px 10px;
 }
 </style>

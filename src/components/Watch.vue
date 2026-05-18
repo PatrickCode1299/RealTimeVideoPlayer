@@ -14,7 +14,9 @@ onMounted(() => {
   // Access DOM elements only after the component has mounted
   remoteVideo = document.getElementById("remoteVideo");
   
-  signalingServer = new WebSocket("ws://localhost:8080");
+  const host = window.location.hostname;
+
+  signalingServer = new WebSocket(`ws://${host}:8080`);
   
   let remoteDescriptionSet = false; // Track whether the remote description is set
   
